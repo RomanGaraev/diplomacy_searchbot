@@ -1,130 +1,41 @@
-version: 2
-jobs:
-  build_and_test:
-    resource_class: xlarge
-    docker:
-      - image: abakhtin/miniconda3_ubuntu:4.7.10
-    environment:
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: cpp
-    steps:
-      - checkout
-      - run:
-         name: "Initialize submodules"
-         command: |
-            git submodule sync
-            git submodule update --init  # Non-recursive for now
-      - run:
-         name: "Install build tools from apt"
-         command: |
-          apt-get update
-          # git fot checking out
-          # wget for conda install
-          # cmake build-essential autoconf libtool pkg-config to build postman and dipcc
-          # libgoogle-glog-dev for dipcc
-          apt-get install --yes git wget cmake build-essential autoconf libtool pkg-config libgoogle-glog-dev
-      - restore_cache:
-          keys:
-            - v05-postman-{{ checksum ".git/modules/thirdparty/github/fairinternal/postman/HEAD" }}
-      - add_ssh_keys:
-          fingerprints:
-            - "05:84:7d:43:05:8c:67:31:c2:4c:9f:0c:29:0a:a2:56"
-            - "f9:fc:79:db:1b:11:3a:1e:3b:ef:04:33:d2:6d:a2:16"
-      - run:
-         name: "Create env and install deps"
-         command: |
-           . /opt/conda/etc/profile.d/conda.sh
+version: 2.1
 
-           set -x
-           conda create --yes -n diplomacy python=3.7
-           source activate diplomacy
-
-           # ci-hack: Install from conda to get cpu only version.
-           conda install pytorch==1.4 cpuonly -c pytorch --yes
-
-           # For boringssl in grpc.
-           conda install go --yes
-
-           pip install -r requirements.txt --progress-bar off
-           conda install protobuf --yes
-
-           if ! ls /postman/postman*.whl; then
-             echo "Need full postman install"
-             git submodule update --recursive
-             pushd thirdparty/github/fairinternal/postman/
-             make compile_slow
-             make build_wheel
-             rm -rf /postman
-             mkdir /postman
-             cp -v postman/dist/*whl /postman/
-             cp -v postman/python/postman/rpc*so /postman/
-             popd
-           fi
-           pip install /postman/postman*.whl
-           # Due to a bug postman wheel doesn't contain .so. So installing it manually.
-           cp /postman/*.so $CONDA_PREFIX/lib/python3.*/site-packages/postman
-           N_DIPCC_JOBS=8 SKIP_TESTS=1 make deps all
-           pip install -U protobuf
-
-      - save_cache:
-          key: v05-postman-{{ checksum ".git/modules/thirdparty/github/fairinternal/postman/HEAD" }}
-          paths: /postman
-      - run:
-         name: "Hello world"
-         command: |
-           source activate diplomacy
-           python run.py --help
-      - run:
-         name: "Check test game cache is up-to-date"
-         command: |
-           source activate diplomacy
-           # Enable once the cache is deterministic
-           # python tests/build_test_cache.py
-           git status
-           if ! git diff-index --quiet HEAD --; then
-              echo "ERROR: tests/build_test_cache.py produced new cache! Re-build and commit cache if it's expected."
-              exit 1
-           fi
-      - run:
-         name: "Run unit tests"
-         command: |
-           source activate diplomacy
-           make test_fast
-      - run:
-         name: "Run integration tests"
-         command: |
-           source activate diplomacy
-           make test_integration
-
-  check_python_format:
-    docker:
-      - image: continuumio/miniconda3:4.7.10
-    steps:
-      - checkout
-      - run:
-         name: "Check format of .py with black"
-         command: |
-           pip install black==19.10b0
-           black --check .
-
-  check_proto_format:
-    docker:
-      - image: abakhtin/miniconda3_ubuntu:4.7.10
-    steps:
-      - checkout
-      - run:
-         name: "Check format of protos with clang-format"
-         command: |
-           clang-format-8 -i conf/*.proto
-           git diff
-           if ! git diff-index --quiet HEAD --; then
-              echo "ERROR: Got diff after running clang-format. See above"
-              exit 1
-           fi
+orbs:
+  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
+  # Orb commands and jobs help you with common scripting around a language/tool
+  # so you dont have to copy and paste it everywhere.
+  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
+  python: circleci/python@1.2
 
 workflows:
-  version: 2
-  diplomacy:
+  sample:  # This is the name of the workflow, feel free to change it to better match your workflow.
+    # Inside the workflow, you define the jobs you want to run. 
+    # For more details on extending your workflow, see the configuration docs: https://circleci.com/docs/2.0/configuration-reference/#workflows 
     jobs:
-      - build_and_test: {}
-      - check_python_format: {}
-      - check_proto_format: {}
+      - build-and-test
+
+
+jobs:
+  build-and-test:  # This is the name of the job, feel free to change it to better match what you're trying to do!
+    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
+    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
+    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
+    # The executor is the environment in which the steps below will be executed - below will use a python 3.9 container
+    # Change the version below to your required version of python
+    docker:
+      - image: cimg/python:3.8
+    # Checkout the code as the first step. This is a dedicated CircleCI step.
+    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
+    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
+    # Then run your tests!
+    # CircleCI will report the results back to your VCS provider.
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: pip
+          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
+          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
+      - run:
+          name: Run tests
+          # This assumes pytest is installed via the install-package step above
+          command: pytest
